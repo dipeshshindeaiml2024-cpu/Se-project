@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Smart School Management System</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback } = React;
+const INDIGO = "#1E2A4A", SLATE = "#5B6B82", GREEN = "#3F8757", RED = "#C1543C", AMBER = "#E8A33D";
+const today = () => new Date().toISOString().slice(0, 10);
+
+function authHeaders() {
+  const t = localStorage.getItem("ssms_token");
+  return t ? { Authorization: "Bearer " + t } : {};
+}
+async function api(path, opts = {}) {
+  const res = await fetch("/api" + path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) },
+  });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Request failed");
+  return data;
+}
+
+function Badge({ status }) {
+  const map = {
+    present: [GREEN, "PRESENT"], absent: [RED, "ABSENT"],
+    paid: [GREEN, "PAID"], due: [RED, "DUE"],
+  };
+  const [color, label] = map[status];
+  return <span className="px-2 py-0.5 rounded text-xs font-bold border-2" style={{ color, borderColor: color }}>{label}</span>;
+}
+function Panel({ title, right, children }) {
+  return (
+    <div className="bg-white border rounded-md shadow-sm mb-5">
+      <div className="flex justify-between items-center px-5 py-3 border-b">
+        <h2 className="text-lg font-bold" style={{ color: INDIGO }}>{title}</h2>
+        {right}
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
+function Btn({ children, onClick, variant = "primary", small, disabled }) {
+  const style = variant === "primary" ? { background: INDIGO, color: "white" }
+    : variant === "danger" ? { background: RED, color: "white" }
+    : { border: "1px solid #D8D4C4", color: INDIGO };
+  return (
+    <button disabled={disabled} onClick={onClick} style={style}
+      className={`rounded font-semibold ${small ? "px-2 py-1 text-xs" : "px-4 py-2 text-sm"} disabled:opacity-50`}>
+      {children}
+    </button>
+  );
+}
+function Input(props) {
+  return <input {...props} className={"w-full px-3 py-2 rounded border text-sm " + (props.className || "")} />;
+}
+function ErrorMsg({ msg }) {
+  if (!msg) return null;
+  return <div className="mb-3 px-3 py-2 rounded text-sm" style={{ background: "#FBEAE6", color: RED }}>{msg}</div>;
+}
+
+const ROLES = [
+  { key: "admin", label: "Admin", demo: "admin" },
+  { key: "teacher", label: "Teacher", demo: "kavita.iyer" },
+  { key: "student", label: "Student", demo: "ananya.rao" },
+  { key: "parent", label: "Parent", demo: "suresh.rao" },
+];
+
+function Login({ onLogin }) {
+  const [role, setRole] = useState(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("demo1234");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function submit() {
+    setError(""); setLoading(true);
+    try {
+      const { token, user } = await api("/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+      onLogin(token, user);
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+      <div className="w-full max-w-md bg-white border rounded-md shadow-sm p-6">
+        <h1 className="text-2xl font-bold text-center mb-1" style={{ color: INDIGO }}>Smart School Management System</h1>
+        <p className="text-sm text-center mb-5" style={{ color: SLATE }}>Sign in to your dashboard</p>
+        <ErrorMsg msg={error} />
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {ROLES.map((r) => (
+            <button key={r.key} onClick={() => { setRole(r.key); setUsername(r.demo); }}
+              className="p-2 rounded border-2 text-sm font-semibold"
+              style={{ borderColor: role === r.key ? INDIGO : "#E4E1D6", color: INDIGO }}>
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <label className="text-xs font-semibold" style={{ color: SLATE }}>Username</label>
+        <Input className="mb-3 mt-1" value={username} onChange={(e) => setUsername(e.target.value)} />
+        <label className="text-xs font-semibold" style={{ color: SLATE }}>Password</label>
+        <Input className="mb-4 mt-1" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+
+        <Btn onClick={submit} disabled={loading || !username || !password}>{loading ? "Signing in..." : "Sign in"}</Btn>
+        <p className="text-xs mt-3" style={{ color: SLATE }}>Demo accounts (password demo1234): admin, kavita.iyer, ananya.rao, suresh.rao</p>
+      </div>
+    </div>
+  );
+}
+
+const TABS = {
+  admin: ["home", "students", "staff", "attendance", "fees", "exams", "notices"],
+  teacher: ["attendance", "exams", "notices"],
+  student: ["attendance", "exams", "fees", "notices"],
+  parent: ["attendance", "exams", "fees", "notices"],
+};
+const LABELS = { home: "Overview", students: "Students", staff: "Staff", attendance: "Attendance", fees: "Fees", exams: "Exams", notices: "Notices" };
+
+function Shell({ role, name, onLogout, active, setActive, children }) {
+  const tabs = TABS[role];
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
+      <aside className="md:w-56 bg-white border-b md:border-b-0 md:border-r p-4">
+        <div className="font-bold mb-4" style={{ color: INDIGO }}>SSMS</div>
+        <nav className="flex md:flex-col gap-1 flex-wrap">
+          {tabs.map((t) => (
+            <button key={t} onClick={() => setActive(t)}
+              className="text-left px-3 py-2 rounded text-sm font-semibold"
+              style={{ background: active === t ? INDIGO : "transparent", color: active === t ? "white" : INDIGO }}>
+              {LABELS[t]}
+            </button>
+          ))}
+        </nav>
+        <div className="mt-6 pt-4 border-t text-xs">
+          <div className="font-bold" style={{ color: INDIGO }}>{name}</div>
+          <div className="capitalize mb-2" style={{ color: SLATE }}>{role}</div>
+          <Btn variant="ghost" small onClick={onLogout}>Log out</Btn>
+        </div>
+      </aside>
+      <main className="flex-1 p-5 max-w-5xl">{children}</main>
+    </div>
+  );
+}
+
+function StudentManagement({ students, reload }) {
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name: "", roll: "", cls: "", parent: "", contact: "" });
+  const [error, setError] = useState("");
+  async function save() {
+    if (!form.name || !form.roll || !form.cls) { setError("Name, roll, class required"); return; }
+    try {
+      if (editing === "new") await api("/students", { method: "POST", body: JSON.stringify(form) });
+      else await api(`/students/${editing}`, { method: "PUT", body: JSON.stringify(form) });
+      setEditing(null); reload();
+    } catch (e) { setError(e.message); }
+  }
+  return (
+    <Panel title="Student Records" right={<Btn small onClick={() => { setForm({ name: "", roll: "", cls: "", parent: "", contact: "" }); setEditing("new"); }}>+ Add student</Btn>}>
+      <ErrorMsg msg={error} />
+      {editing && (
+        <div className="mb-4 p-3 border border-dashed rounded grid grid-cols-2 gap-2">
+          <Input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <Input placeholder="Roll no." value={form.roll} onChange={(e) => setForm({ ...form, roll: e.target.value })} />
+          <Input placeholder="Class" value={form.cls} onChange={(e) => setForm({ ...form, cls: e.target.value })} />
+          <Input placeholder="Parent" value={form.parent} onChange={(e) => setForm({ ...form, parent: e.target.value })} />
+          <Input placeholder="Contact" className="col-span-2" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} />
+          <div className="col-span-2 flex gap-2"><Btn small onClick={save}>Save</Btn><Btn small variant="ghost" onClick={() => setEditing(null)}>Cancel</Btn></div>
+        </div>
+      )}
+      <table className="w-full text-sm">
+        <thead><tr className="text-left border-b-2" style={{ borderColor: INDIGO }}>
+          <th className="py-1">Roll</th><th>Name</th><th>Class</th><th>Parent</th><th>Contact</th><th></th>
+        </tr></thead>
+        <tbody>
+          {students.map((s) => (
+            <tr key={s.id} className="border-b border-dashed">
+              <td className="py-1">{s.roll}</td><td className="font-semibold" style={{ color: INDIGO }}>{s.name}</td>
+              <td>{s.cls}</td><td>{s.parent}</td><td>{s.contact}</td>
+              <td className="text-right">
+                <button className="text-xs mr-2" onClick={() => { setForm(s); setEditing(s.id); }}>Edit</button>
+                <button className="text-xs" style={{ color: RED }} onClick={async () => { await api(`/students/${s.id}`, { method: "DELETE" }); reload(); }}>Delete</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+function AttendancePanel({ students, attMap, reload, editable }) {
+  const date = today();
+  async function mark(id, status) { await api("/attendance", { method: "POST", body: JSON.stringify({ studentId: id, date, status }) }); reload(); }
+
+  return (
+    <Panel title={`Today's Attendance — ${date}`}>
+      <div className="space-y-2">
+        {students.map((s) => {
+          const status = attMap[s.id]?.[date];
+          return (
+            <div key={s.id} className="flex justify-between items-center p-2 rounded bg-gray-50 border">
+              <div><div className="font-semibold text-sm" style={{ color: INDIGO }}>{s.name}</div><div className="text-xs" style={{ color: SLATE }}>{s.roll}</div></div>
+              <div className="flex items-center gap-2">
+                {status && <Badge status={status} />}
+                {editable && <><Btn small variant="ghost" onClick={() => mark(s.id, "present")}>Present</Btn><Btn small variant="ghost" onClick={() => mark(s.id, "absent")}>Absent</Btn></>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+function MyAttendance({ studentId, attMap }) {
+  const days = Object.entries(attMap[studentId] || {}).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  const pct = days.length ? Math.round((days.filter(([, v]) => v === "present").length / days.length) * 100) : 100;
+  return (
+    <Panel title="My Attendance">
+      <div className="text-3xl font-bold mb-3" style={{ color: INDIGO }}>{pct}%</div>
+      {days.map(([d, v]) => <div key={d} className="flex justify-between p-2 border-b text-sm"><span>{d}</span><Badge status={v} /></div>)}
+    </Panel>
+  );
+}
+
+function FeesPanel({ rows, reload, editable }) {
+  return (
+    <Panel title="Fee Records">
+      <table className="w-full text-sm">
+        <thead><tr className="text-left border-b-2" style={{ borderColor: INDIGO }}><th className="py-1">Student</th><th>Total</th><th>Paid</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.student_id} className="border-b border-dashed">
+              <td className="py-1 font-semibold" style={{ color: INDIGO }}>{r.name}</td>
+              <td>₹{r.total}</td><td>₹{r.paid}</td>
+              <td><Badge status={r.total - r.paid > 0 ? "due" : "paid"} /></td>
+              <td>{editable && r.total - r.paid > 0 && <Btn small onClick={async () => { await api(`/fees/${r.student_id}/pay`, { method: "POST" }); reload(); }}>Mark paid</Btn>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+function ExamsPanel({ students, marksMap, reload, editable }) {
+  const subjects = ["Maths", "Science", "English"];
+  async function update(id, sub, val) {
+    await api("/marks", { method: "POST", body: JSON.stringify({ studentId: id, subject: sub, score: Number(val) || 0 }) });
+    reload();
+  }
+  return (
+    <Panel title="Marks & Results">
+      <table className="w-full text-sm">
+        <thead><tr className="text-left border-b-2" style={{ borderColor: INDIGO }}><th className="py-1">Student</th>{subjects.map((s) => <th key={s}>{s}</th>)}<th>Avg</th></tr></thead>
+        <tbody>
+          {students.map((s) => {
+            const m = marksMap[s.id] || {};
+            const avg = Math.round(subjects.reduce((a, sub) => a + (m[sub] || 0), 0) / subjects.length);
+            return (
+              <tr key={s.id} className="border-b border-dashed">
+                <td className="py-1 font-semibold" style={{ color: INDIGO }}>{s.name}</td>
+                {subjects.map((sub) => (
+                  <td key={sub}>{editable
+                    ? <input type="number" min="0" max="100" value={m[sub] ?? 0} onChange={(e) => update(s.id, sub, e.target.value)} className="w-14 border rounded px-1" />
+                    : (m[sub] ?? "—")}
+                  </td>
+                ))}
+                <td className="font-bold">{avg}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+function NoticesPanel({ notices, canPost, reload }) {
+  const [title, setTitle] = useState(""); const [body, setBody] = useState("");
+  return (
+    <Panel title="Notices">
+      {canPost && (
+        <div className="mb-4 p-3 border border-dashed rounded space-y-2">
+          <Input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <Input placeholder="Message" value={body} onChange={(e) => setBody(e.target.value)} />
+          <Btn small onClick={async () => { if (!title) return; await api("/notices", { method: "POST", body: JSON.stringify({ title, body }) }); setTitle(""); setBody(""); reload(); }}>Post</Btn>
+        </div>
+      )}
+      {notices.map((n) => (
+        <div key={n.id} className="p-3 mb-2 rounded border-l-4 bg-gray-50" style={{ borderColor: AMBER }}>
+          <div className="flex justify-between"><b style={{ color: INDIGO }}>{n.title}</b><span className="text-xs" style={{ color: SLATE }}>{n.date}</span></div>
+          <div className="text-sm" style={{ color: SLATE }}>{n.body}</div>
+
+        </div>
+      ))}
+    </Panel>
+  );
+}
+
+function App() {
+  const [session, setSession] = useState(null);
+  const [active, setActive] = useState("home");
+  const [students, setStudents] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [attMap, setAttMap] = useState({});
+  const [feeRows, setFeeRows] = useState([]);
+  const [marksMap, setMarksMap] = useState({});
+  const [notices, setNotices] = useState([]);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const t = localStorage.getItem("ssms_token"), u = localStorage.getItem("ssms_user");
+    if (t && u) setSession({ token: t, user: JSON.parse(u) });
+  }, []);
+
+  const loadAll = useCallback(async (role) => {
+    try {
+      const tasks = [api("/attendance"), api("/fees"), api("/marks"), api("/notices")];
+      if (role === "admin" || role === "teacher") tasks.push(api("/students"));
+      if (role === "admin") tasks.push(api("/staff"));
+      const [att, fees, marks, notes, studentsData, staffData] = await Promise.all(tasks);
+      const aMap = {}; att.forEach((r) => { aMap[r.student_id] = aMap[r.student_id] || {}; aMap[r.student_id][r.date] = r.status; });
+      const mMap = {}; marks.forEach((r) => { mMap[r.student_id] = mMap[r.student_id] || {}; mMap[r.student_id][r.subject] = r.score; });
+      setAttMap(aMap); setMarksMap(mMap); setFeeRows(fees); setNotices(notes);
+      if (studentsData) setStudents(studentsData);
+      if (staffData) setStaff(staffData);
+      if (role === "student" || role === "parent") setStudents(fees.map((r) => ({ id: r.student_id, name: r.name })));
+    } catch (e) { setErr(e.message); }
+  }, []);
+
+  useEffect(() => { if (session) loadAll(session.user.role); }, [session, loadAll]);
+
+  function handleLogin(token, user) {
+    localStorage.setItem("ssms_token", token); localStorage.setItem("ssms_user", JSON.stringify(user));
+    setSession({ token, user }); setActive(TABS[user.role][0]);
+  }
+  function handleLogout() { localStorage.removeItem("ssms_token"); localStorage.removeItem("ssms_user"); setSession(null); }
+
+  if (!session) return <Login onLogin={handleLogin} />;
+  const { role, name, studentId } = session.user;
+  const tab = TABS[role].includes(active) ? active : TABS[role][0];
+  const reload = () => loadAll(role);
+  const myId = role === "student" ? studentId : students[0]?.id;
+
+  return (
+    <Shell role={role} name={name} onLogout={handleLogout} active={tab} setActive={setActive}>
+      <ErrorMsg msg={err} />
+      {role === "admin" && tab === "home" && (
+        <Panel title="Overview">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="p-3 border rounded bg-white"><div className="text-xl font-bold" style={{ color: INDIGO }}>{students.length}</div><div className="text-xs" style={{ color: SLATE }}>Students</div></div>
+            <div className="p-3 border rounded bg-white"><div className="text-xl font-bold" style={{ color: INDIGO }}>{staff.length}</div><div className="text-xs" style={{ color: SLATE }}>Staff</div></div>
+            <div className="p-3 border rounded bg-white"><div className="text-xl font-bold" style={{ color: INDIGO }}>{students.filter((s) => attMap[s.id]?.[today()] === "present").length}/{students.length}</div><div className="text-xs" style={{ color: SLATE }}>Present today</div></div>
+            <div className="p-3 border rounded bg-white"><div className="text-xl font-bold" style={{ color: RED }}>₹{feeRows.reduce((s, r) => s + (r.total - r.paid), 0)}</div><div className="text-xs" style={{ color: SLATE }}>Fees pending</div></div>
+          </div>
+        </Panel>
+      )}
+      {role === "admin" && tab === "students" && <StudentManagement students={students} reload={reload} />}
+      {role === "admin" && tab === "staff" && (
+        <Panel title="Staff Directory">
+          {staff.map((p) => <div key={p.id} className="p-2 border-b text-sm"><b style={{ color: INDIGO }}>{p.name}</b> — {p.role}, {p.subject}</div>)}
+        </Panel>
+      )}
+      {tab === "attendance" && (role === "admin" || role === "teacher") && <AttendancePanel students={students} attMap={attMap} reload={reload} editable />}
+      {tab === "attendance" && (role === "student" || role === "parent") && <MyAttendance studentId={myId} attMap={attMap} />}
+      {tab === "fees" && <FeesPanel rows={feeRows} reload={reload} editable={role === "admin"} />}
+      {tab === "exams" && <ExamsPanel students={students} marksMap={marksMap} reload={reload} editable={role === "teacher"} />}
+      {tab === "notices" && <NoticesPanel notices={notices} canPost={role === "admin" || role === "teacher"} reload={reload} />}
+    </Shell>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
+
